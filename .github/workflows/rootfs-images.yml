@@ -248,6 +248,22 @@ jobs:
           done
           echo "binfmt handlers: $(ls /proc/sys/fs/binfmt_misc/ | sort | tr '\n' ' ')"
 
+      # warty/hoary 的 i386 是 2004–2005 年的 glibc，在新内核上会触发
+      # ld.so 的 _dl_sysinfo_dso 断言；而 Ubuntu 26.04 的 qemu-user 已不再提供
+      # qemu-i386。这里取 Debian 的静态 qemu-i386-static，构建脚本检测到该断言后
+      # 会自动注册 binfmt 并重试，套件构建完再撤销。
+      - name: Install qemu-i386 for ancient Ubuntu i386
+        if: matrix.distro == 'ubuntu' && (matrix.suite == 'warty' || matrix.suite == 'hoary')
+        run: |
+          set -euo pipefail
+          base=https://deb.debian.org/debian/pool/main/q/qemu
+          deb=$(curl -fsSL "$base/" | grep -oE 'qemu-user-static_[^"]+_amd64\.deb' | sort -V | tail -n1)
+          [ -n "$deb" ] || { echo "找不到 qemu-user-static 的 deb" >&2; exit 1; }
+          curl -fsSL "$base/$deb" -o /tmp/qemu-user-static.deb
+          dpkg-deb -x /tmp/qemu-user-static.deb /tmp/qemu-static
+          sudo install -m 0755 /tmp/qemu-static/usr/bin/qemu-i386-static /usr/bin/qemu-i386-static
+          /usr/bin/qemu-i386-static --version | head -n1
+
       # debootstrap 的下载缓存在 $HOME 下；同一套件的重复构建可以命中
       - name: Cache debootstrap packages
         uses: actions/cache@v4
