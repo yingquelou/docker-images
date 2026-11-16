@@ -156,8 +156,10 @@ DRY_RUN=1 scripts/publish-rootfs.sh all --dir debian
 ## GitHub 侧需要配置的权限
 
 - 工作流已声明 `permissions: packages: write`，使用内置 `GITHUB_TOKEN` 即可推送，
-  **不需要额外 secrets**。若组织策略禁用了写权限，需要在
-  Settings → Actions → General → Workflow permissions 允许读写。
+  **不需要额外 secrets**。仓库设置需为 “Read and write permissions”。
+- **已存在的包**还需要在各包的 Package settings → Manage Actions access 里把
+  `yingquelou/docker-images` 加为 **Write**，否则会报
+  `denied: permission_denied: write_package`（新建包会自动获得写权限）。
 - 现有 `alpine`、`debian`、`ubuntu`、`wsl` 包均为 public，新标签会继承包可见性；
   如果新建了别的包名，默认是 private，需要在包设置里改为 public。
 - 镜像带有 `org.opencontainers.image.source` 标签，新版本会自动关联到本仓库。
