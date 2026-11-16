@@ -273,9 +273,16 @@ jobs:
             echo "qemu-i386 已注册"
           else
             conf=$(find /tmp/qemu-user-binfmt -type f -name 'qemu-i386.conf' | head -n1)
-            echo "conf: $conf"; cat "$conf"
-            awk -F: 'BEGIN{OFS=":"} {$7="/usr/bin/qemu-i386-static"} 1' "$conf" \
-              | sudo tee /proc/sys/fs/binfmt_misc/register
+            if [ -n "$conf" ]; then
+              echo "conf: $conf"; cat "$conf"
+              line=$(awk -F: 'BEGIN{OFS=":"} {$7="/usr/bin/qemu-i386-static"} 1' "$conf")
+            else
+              # Debian 的 qemu-user-binfmt 不提供 i386 conf（i386 在 amd64 上算原生），
+              # 这里用 qemu 官方的 i386 magic/mask 手工注册。
+              echo "qemu-user-binfmt 中没有 i386 conf，手工注册"
+              line=':qemu-i386:M::\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x03\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\x00\x00\x00\x00\x00\xfe\xff\xff\xff:/usr/bin/qemu-i386-static:CF'
+            fi
+            printf '%s\n' "$line" | sudo tee /proc/sys/fs/binfmt_misc/register
             ls -l /proc/sys/fs/binfmt_misc/qemu-i386
           fi
 
