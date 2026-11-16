@@ -232,16 +232,21 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
+          # Ubuntu 26.04 起 qemu-user-static 变成虚拟包，由 qemu-user-binfmt 提供；
+          # 后者依赖 qemu-user 的静态二进制，并带 mipsel/ppc 等 setup-qemu 未覆盖的
+          # /usr/lib/binfmt.d 定义。
           sudo apt-get install -y debootstrap mmdebstrap debian-archive-keyring \
-            ubuntu-keyring qemu-user-static binfmt-support skopeo
-          # setup-qemu 已经注册了常见架构；这里补齐它没有覆盖的（例如 32 位 powerpc）
-          for def in /usr/share/binfmts/qemu-*; do
-            [ -e "$def" ] || continue
-            name=$(basename "$def")
+            ubuntu-keyring qemu-user-binfmt skopeo
+          sudo systemctl restart systemd-binfmt || true
+          # systemd 不可用时的兜底：直接注册缺失的处理器（已存在的跳过，避免与 setup-qemu 冲突）
+          for conf in /usr/lib/binfmt.d/qemu-*.conf; do
+            [ -e "$conf" ] || continue
+            name=$(basename "$conf" .conf)
             if [ ! -e "/proc/sys/fs/binfmt_misc/$name" ]; then
-              sudo update-binfmts --enable "$name" || true
+              sudo sh -c "cat '$conf' > /proc/sys/fs/binfmt_misc/register" 2>/dev/null || true
             fi
           done
+          echo "binfmt handlers: $(ls /proc/sys/fs/binfmt_misc/ | sort | tr '\n' ' ')"
 
       # debootstrap 的下载缓存在 $HOME 下；同一套件的重复构建可以命中
       - name: Cache debootstrap packages

@@ -60,8 +60,9 @@ GitHub Packages 的**容器（container）**类型仓库 `ghcr.io/yingquelou/*`�
 | ubuntu | 35 个归档套件 | amd64、i386（降级） |
 
 - 跨架构构建依赖 qemu-user binfmt：Actions 的 build job 用 `docker/setup-qemu-action`
-  注册常见处理器，再用 `qemu-user-static` + `binfmt-support` 补齐它未覆盖的架构
-  （例如 32 位 powerpc），`debootstrap`/`mmdebstrap` 在目标 chroot 里直接执行目标架构二进制。
+  注册常见处理器，再用 `qemu-user-binfmt`（Ubuntu 26.04 起它取代虚拟包 `qemu-user-static`，
+  带 `qemu-user` 静态二进制与 `/usr/lib/binfmt.d` 定义）补齐 mipsel/ppc 等未覆盖的架构，
+  `debootstrap`/`mmdebstrap` 在目标 chroot 里直接执行目标架构二进制。
 - Ubuntu 的非 amd64/i386 架构从 `https://ports.ubuntu.com/ubuntu-ports` 取包
   （可用 `UBUNTU_PORTS_MIRROR` 覆盖），amd64/i386 仍走原有镜像。
 - 不单独发布的架构：`amd64v3`（Ubuntu 26.04 起的 x86-64-v3 包变体，与 amd64 共用
@@ -120,8 +121,9 @@ rootfs 构建阶段只清理缓存、文档、语言包和临时文件，保证�
 ## 本地构建 / 发布（WSL 或 Linux）
 
 发布需要 `skopeo` 与 `python3`（Debian/Ubuntu：`sudo apt-get install -y skopeo python3`）。
-跨架构构建还需要 `qemu-user-static` 并注册 binfmt（例如
-`sudo apt-get install -y qemu-user-static binfmt-support`）。
+跨架构构建还需要 qemu 静态二进制并注册 binfmt（Ubuntu 26.04：
+`sudo apt-get install -y qemu-user-binfmt && sudo systemctl restart systemd-binfmt`；
+24.04 及更早可用 `qemu-user-static binfmt-support`）。
 
 ```bash
 # wsl:alpine（沿用 compose.yaml）
