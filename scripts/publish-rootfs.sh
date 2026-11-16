@@ -70,12 +70,9 @@ retry() {
     done
 }
 
+# skopeo 新版已移除全局 --authfile，改为只靠 REGISTRY_AUTH_FILE 环境变量传递凭据
 skopeo_cmd() {
-    if [ -n "${REGISTRY_AUTH_FILE:-}" ]; then
-        "$SKOPEO" --authfile "$REGISTRY_AUTH_FILE" "$@"
-    else
-        "$SKOPEO" "$@"
-    fi
+    "$SKOPEO" "$@"
 }
 
 run_skopeo() {
@@ -163,7 +160,7 @@ push_group() {
         --source "$SOURCE_URL" \
         "${arch_args[@]}"
 
-    log "推送 $distro:$suite ← ${#arch_args[@]} 个架构（单条多架构清单）"
+    log "推送 $distro:$suite ← $(( ${#arch_args[@]} / 2 )) 个架构（单条多架构清单）"
     run_skopeo copy --all "oci:$layout:$suite" "docker://$REGISTRY/$OWNER/$distro:$suite"
 }
 
