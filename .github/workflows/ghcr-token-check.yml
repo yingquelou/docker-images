@@ -1,0 +1,24 @@
+name: ghcr token check
+
+# 临时诊断：打印 GITHUB_TOKEN 在 GHCR 目标包上的有效权限（access claims）。
+# 用法：Actions 里手动运行，然后删除本文件。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect GHCR token claims
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tok=$(curl -fsSL -u "x:${GH_TOKEN}" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:yingquelou/debian:pull,push" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          python3 -c 'import base64,json,sys; p=sys.argv[1].split(".")[1]; p+="="*(-len(p)%4); print(json.dumps(json.loads(base64.urlsafe_b64decode(p)).get("access"), indent=2, ensure_ascii=False))' "$tok"
