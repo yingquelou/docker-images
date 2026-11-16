@@ -257,11 +257,14 @@ jobs:
         run: |
           set -euo pipefail
           base=https://deb.debian.org/debian/pool/main/q/qemu
-          deb=$(curl -fsSL "$base/" | grep -oE 'qemu-user-static_[^"]+_amd64\.deb' | sort -V | tail -n1)
-          [ -n "$deb" ] || { echo "找不到 qemu-user-static 的 deb" >&2; exit 1; }
+          # 固定 bookworm 的 qemu 7.x：新版把二进制拆到别的路径，且不再带 i386
+          deb=$(curl -fsSL "$base/" | grep -oE 'qemu-user-static_7\.[^"]+_amd64\.deb' | sort -V | tail -n1)
+          [ -n "$deb" ] || { echo "找不到 bookworm 的 qemu-user-static deb" >&2; exit 1; }
           curl -fsSL "$base/$deb" -o /tmp/qemu-user-static.deb
           dpkg-deb -x /tmp/qemu-user-static.deb /tmp/qemu-static
-          sudo install -m 0755 /tmp/qemu-static/usr/bin/qemu-i386-static /usr/bin/qemu-i386-static
+          src=$(find /tmp/qemu-static -type f -name 'qemu-i386-static' | head -n1)
+          [ -n "$src" ] || { echo "deb 中没有 qemu-i386-static：" >&2; find /tmp/qemu-static -name 'qemu-i386*' >&2; exit 1; }
+          sudo install -m 0755 "$src" /usr/bin/qemu-i386-static
           /usr/bin/qemu-i386-static --version | head -n1
 
       # debootstrap 的下载缓存在 $HOME 下；同一套件的重复构建可以命中
