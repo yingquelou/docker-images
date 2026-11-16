@@ -1,1 +1,3 @@
 .*/
+# GitHub Actions 工作流需要入库（其余隐藏目录继续忽略）
+!.github/

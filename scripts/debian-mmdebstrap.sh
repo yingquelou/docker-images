@@ -32,6 +32,27 @@ fi
 
 prev_dir=$(pwd)
 
+# ---------- 套件清单 ----------
+# 主线镜像仍在提供的版本
+release="trixie bookworm bullseye"
+
+# 只有归档镜像才有的版本；mmdebstrap 实测能走通的：
+#   buster（setup-hook，实测 34.8MB）、jessie（官方钩子，实测 38.3MB）、stretch
+old_release="buster stretch jessie"
+
+# 供 GitHub Actions 读取套件清单（不执行任何构建、不碰任何目录）：
+#   LIST_SUITES=1 bash debian-mmdebstrap.sh
+if [ "${LIST_SUITES:-0}" = "1" ]; then
+    printf '%s\n' ${release} ${old_release}
+    exit 0
+fi
+
+# 只输出仍在官方发布线上的套件：这些套件在 Actions 里要覆盖官方全部架构。
+if [ "${LIST_MODERN:-0}" = "1" ]; then
+    printf '%s\n' ${release}
+    exit 0
+fi
+
 # ---------- 依赖与路径 ----------
 command -v sudo >/dev/null 2>&1 || { printf '缺少 sudo\n' >&2; exit 1; }
 MMDEBSTRAP_BIN=$(command -v mmdebstrap 2>/dev/null || true)
@@ -84,13 +105,6 @@ mkdir -p ./debian/logs ~/debian
 # ---------- 镜像与版本 ----------
 MAIN_MIRROR="https://deb.debian.org/debian"
 ARCHIVE_MIRROR="https://archive.debian.org/debian"
-
-# 主线镜像仍在提供的版本
-release="trixie bookworm bullseye"
-
-# 只有归档镜像才有的版本；mmdebstrap 实测能走通的：
-#   buster（setup-hook，实测 34.8MB）、jessie（官方钩子，实测 38.3MB）、stretch
-old_release="buster stretch jessie"
 
 # 归档里连 dists/<suite>/Release 都没有的版本：mmdebstrap 无法构建，这里只报告。
 # 它们已由独立构建器 debian-ancient.py 负责（纯解包，不依赖 Release），见该脚本文件头。

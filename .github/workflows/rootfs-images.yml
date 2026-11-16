@@ -1,0 +1,328 @@
+# 构建 Debian / Ubuntu rootfs 并发布到 GHCR（GitHub Packages 容器类型）。
+#
+# 发布命名（与仓库已有 GHCR 包一致，每个套件只发布一个多架构标签）：
+#   ghcr.io/yingquelou/<debian|ubuntu>:<suite>    多架构索引（含本次构建到的全部架构）
+#   ghcr.io/yingquelou/<debian|ubuntu>:latest     追踪官方最新版本（动态解析）
+#   ghcr.io/yingquelou/<debian|ubuntu>:lts        追踪官方最新 LTS（动态解析）
+# 不再生成 <suite>-<arch> 逐架构标签：同一套件的各架构由 publish-rootfs.sh 合成
+# 一个 OCI 索引后用 skopeo 推送，注册表里只会出现合并后的多架构清单。
+#
+# 架构覆盖：仍在官方发布线上的套件（Debian trixie/bookworm/bullseye、Ubuntu 主线套件）
+# 覆盖官方 Release 里的全部架构；古早归档套件按实际可下载集合（amd64/i386）降级覆盖。
+# 跨架构构建依赖 qemu-user binfmt（setup-qemu 注册），非 amd64/i386 的 Ubuntu 架构
+# 从 ubuntu-ports 镜像取包。
+#
+# 只有 workflow_dispatch：整套矩阵（debian 18 个套件、ubuntu 44 个套件）耗时长，
+# 不适合在每次 push 时自动触发；需要发布时手动触发，默认就是全量套件与架构。
+
+name: rootfs images
+
+on:
+  workflow_dispatch:
+    inputs:
+      distributions:
+        description: '要构建的发行版'
+        type: choice
+        options: [both, debian, ubuntu]
+        default: both
+      suites:
+        description: '只构建这些套件（空格/逗号分隔；留空=脚本内置全集）'
+        type: string
+        default: ''
+      arches:
+        description: '架构过滤（空格/逗号分隔；留空=按官方每个套件的实际集合）'
+        type: string
+        default: ''
+      builder:
+        description: 'rootfs 构建器（mmdebstrap 只覆盖部分套件）'
+        type: choice
+        options: [debootstrap, mmdebstrap]
+        default: debootstrap
+      publish:
+        description: '导入并推送到 GHCR（关闭时只构建并保留日志）'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: rootfs-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      latest_args: ${{ steps.targets.outputs.latest }}
+      lts_args: ${{ steps.targets.outputs.lts }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 套件清单直接从构建脚本里读（LIST_SUITES=1 / --list-suites），
+      # 避免 workflow 里再维护一份会漂移的列表。每个套件的架构集合也现查官方
+      # Release（scripts/suite-arches.py）：现代套件取官方全部架构，归档套件降级为
+      # 实际可下载的 amd64/i386。
+      - name: Build matrix
+        id: matrix
+        env:
+          LIST_SUITES: '1'
+          DISTROS: ${{ inputs.distributions }}
+          SUITE_FILTER: ${{ inputs.suites }}
+          ARCH_FILTER: ${{ inputs.arches }}
+          BUILDER: ${{ inputs.builder }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, subprocess, sys
+
+          distros = os.environ["DISTROS"]
+          wanted = os.environ["SUITE_FILTER"].replace(",", " ").split()
+          arch_filter = os.environ["ARCH_FILTER"].replace(",", " ").split()
+          builder = os.environ["BUILDER"]
+
+          def call(cmd, extra_env):
+              env = dict(os.environ, **extra_env)
+              return subprocess.check_output(cmd, text=True, env=env).split()
+
+          def list_suites(cmd):
+              return call(cmd, {"LIST_SUITES": "1", "LIST_MODERN": "0"})
+
+          def list_modern(cmd):
+              return call(cmd, {"LIST_SUITES": "0", "LIST_MODERN": "1"})
+
+          def suite_arches(distro, suite, modern):
+              cmd = ["python3", "scripts/suite-arches.py",
+                     "--distro", distro, "--suite", suite,
+                     "--modern" if modern else "--legacy"]
+              arches = subprocess.check_output(cmd, text=True).split()
+              if arch_filter:
+                  arches = [a for a in arches if a in arch_filter]
+              return arches
+
+          entries = []
+
+          def add(distro, suite, kind, script, arch_list):
+              if wanted and suite not in wanted:
+                  return
+              if not arch_list:
+                  return
+              entries.append({
+                  "distro": distro,
+                  "suite": suite,
+                  "kind": kind,
+                  "script": script,
+                  "arches": " ".join(arch_list),
+              })
+
+          if distros in ("both", "debian"):
+              script = "scripts/debian-%s.sh" % builder
+              modern = set(list_modern(["bash", script]))
+              for suite in list_suites(["bash", script]):
+                  add("debian", suite, "rootfs", script,
+                      suite_arches("debian", suite, suite in modern))
+              # debian-ancient.py 是独立构建器，只产出 i386
+              ancient_arches = [a for a in ["i386"] if not arch_filter or a in arch_filter]
+              for suite in list_suites(["python3", "scripts/debian-ancient.py", "--list-suites"]):
+                  add("debian", suite, "ancient", "scripts/debian-ancient.py", ancient_arches)
+
+          if distros in ("both", "ubuntu"):
+              script = "scripts/ubuntu-%s.sh" % builder
+              modern = set(list_modern(["bash", script]))
+              for suite in list_suites(["bash", script]):
+                  add("ubuntu", suite, "rootfs", script,
+                      suite_arches("ubuntu", suite, suite in modern))
+
+          if not entries:
+              print("没有匹配的套件，请检查 suites/arches 输入", file=sys.stderr)
+              sys.exit(1)
+
+          for entry in entries:
+              print("  %s/%s: %s" % (entry["distro"], entry["suite"], entry["arches"]),
+                    file=sys.stderr)
+          print("matrix=" + json.dumps({"include": entries}, separators=(",", ":")))
+          PY
+
+      # latest / lts 目标不写死版本号，每次运行都从官方元数据解析：
+      #   debian: dists/stable → latest；dists/oldstable → lts（Debian LTS 覆盖的套件）
+      #   ubuntu: meta-release / meta-release-lts 中 Supported: 1 的最大版本
+      - name: Resolve official latest/lts targets
+        id: targets
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import sys
+          import urllib.request
+
+          def fetch(url, parse):
+              try:
+                  return parse(urllib.request.urlopen(url, timeout=60).read().decode())
+              except Exception as exc:
+                  print("WARN: %s: %s" % (url, exc), file=sys.stderr)
+                  return ""
+
+          def parse_codename(text):
+              for line in text.splitlines():
+                  if line.startswith("Codename: "):
+                      return line.split(": ", 1)[1].strip()
+              return ""
+
+          def parse_newest_supported(text):
+              best = None
+              for block in text.split("\n\n"):
+                  fields = {}
+                  for line in block.splitlines():
+                      if ": " in line:
+                          key, value = line.split(": ", 1)
+                          fields[key] = value
+                  if fields.get("Supported") != "1":
+                      continue
+                  version = fields.get("Version", "").split()[0]
+                  dist = fields.get("Dist", "")
+                  try:
+                      key = tuple(int(part) for part in version.split("."))
+                  except ValueError:
+                      continue
+                  if dist and (best is None or key > best[0]):
+                      best = (key, dist)
+              return best[1] if best else ""
+
+          debian_stable = fetch("https://deb.debian.org/debian/dists/stable/Release", parse_codename)
+          debian_oldstable = fetch("https://deb.debian.org/debian/dists/oldstable/Release", parse_codename)
+          ubuntu_latest = fetch("https://changelogs.ubuntu.com/meta-release", parse_newest_supported)
+          ubuntu_lts = fetch("https://changelogs.ubuntu.com/meta-release-lts", parse_newest_supported)
+
+          latest = []
+          lts = []
+          if debian_stable:
+              latest.append("debian:%s" % debian_stable)
+          if debian_oldstable:
+              lts.append("debian:%s" % debian_oldstable)
+          if ubuntu_latest:
+              latest.append("ubuntu:%s" % ubuntu_latest)
+          if ubuntu_lts:
+              lts.append("ubuntu:%s" % ubuntu_lts)
+
+          print("latest=" + " ".join(latest))
+          print("lts=" + " ".join(lts))
+          PY
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      # GitHub Free 的账户级总并发是 20（Pro 为 40）。这里取 20：在 Free 上能跑满，
+      # 在 Pro 上也不会超过上限；单套件内的架构仍然串行，靠套件间并行压短墙钟。
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    name: ${{ matrix.distro }}/${{ matrix.suite }}${{ matrix.kind == 'ancient' && ' (ancient)' || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 跨架构 rootfs：注册 qemu-user binfmt，debootstrap/mmdebstrap 在目标 chroot 里
+      # 执行 arm64/armel/armhf/mips*/ppc64el/riscv64/s390x/powerpc 等架构的二进制
+      - name: Set up QEMU for cross-architecture rootfs
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap mmdebstrap debian-archive-keyring \
+            ubuntu-keyring qemu-user-static binfmt-support skopeo
+          # setup-qemu 已经注册了常见架构；这里补齐它没有覆盖的（例如 32 位 powerpc）
+          for def in /usr/share/binfmts/qemu-*; do
+            [ -e "$def" ] || continue
+            name=$(basename "$def")
+            if [ ! -e "/proc/sys/fs/binfmt_misc/$name" ]; then
+              sudo update-binfmts --enable "$name" || true
+            fi
+          done
+
+      # debootstrap 的下载缓存在 $HOME 下；同一套件的重复构建可以命中
+      - name: Cache debootstrap packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/debootstrap-cache
+            ~/debootstrap-cache-debian
+          key: ${{ matrix.distro }}-${{ matrix.suite }}-${{ matrix.arches }}-${{ hashFiles('scripts/**') }}
+          restore-keys: |
+            ${{ matrix.distro }}-${{ matrix.suite }}-
+            ${{ matrix.distro }}-
+
+      - name: Build rootfs
+        env:
+          ONLY: ${{ matrix.suite }}
+          ARCHES: ${{ matrix.arches }}
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.kind }}" = "ancient" ]; then
+            sudo env ONLY="$ONLY" ARCHES="$ARCHES" python3 scripts/debian-ancient.py
+          else
+            bash "${{ matrix.script }}"
+          fi
+
+      - name: Publish multi-arch suite image to GHCR
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_OWNER: yingquelou
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # skopeo 复用 docker login 写的凭据（导出必须在同一个 step 内生效）
+          export REGISTRY_AUTH_FILE="$HOME/.docker/config.json"
+          scripts/publish-rootfs.sh push --dir "${{ matrix.distro }}"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.distro }}-${{ matrix.suite }}
+          # 只上传构建日志；rootfs tar.gz 不作为 artifact 保留
+          path: |
+            debian/logs/**
+            ubuntu/logs/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # 套件标签已由各 build job 直接推送成多架构索引，这里只把官方最新套件的索引
+  # 复制成 latest/lts（skopeo copy --all，digest 不变，不会产生逐架构标签）
+  merge:
+    needs: [prepare, build]
+    if: ${{ inputs.publish && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Promote latest/lts aliases
+        env:
+          IMAGE_OWNER: yingquelou
+          LATEST_TARGETS: ${{ needs.prepare.outputs.latest_args }}
+          LTS_TARGETS: ${{ needs.prepare.outputs.lts_args }}
+        run: |
+          set -euo pipefail
+          export REGISTRY_AUTH_FILE="$HOME/.docker/config.json"
+          args=()
+          for target in $LATEST_TARGETS; do
+            args+=(--latest "$target")
+          done
+          for target in $LTS_TARGETS; do
+            args+=(--lts "$target")
+          done
+          scripts/publish-rootfs.sh merge "${args[@]}"

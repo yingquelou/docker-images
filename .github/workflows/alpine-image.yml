@@ -1,0 +1,112 @@
+# 构建 Alpine 相关镜像并推送到 GHCR（GitHub Packages 容器类型）。
+#
+#   ghcr.io/yingquelou/alpine:<version>       ← scripts/publish-alpine-image.sh，
+#                                                  含官方全部架构的多架构索引
+#   ghcr.io/yingquelou/alpine:<major.minor>   ← 该系列最新补丁的稳定别名（如 3.24）
+#   ghcr.io/yingquelou/alpine:latest          ← 仅当构建的是官方最新稳定版时更新
+#   ghcr.io/yingquelou/wsl:alpine             ← Dockerfile.alpine（FROM alpine:latest）
+#
+# 每个版本只发布一个多架构清单，不再生成 <version>-<arch> 逐架构标签。
+# 不保留 buildx provenance attestation，wsl:alpine 直接是 linux/amd64 镜像清单。
+# 版本与架构默认都由官方发布源动态解析（latest-stable + v<series>/releases/ 实际可下载项），
+# 可在手动触发时固定。Alpine 没有 LTS 发布序列，因此不发布 alpine:lts。
+# 基础镜像默认只在手动触发且 build_base=true 时重建；Dockerfile.alpine 变更时只重建 wsl:alpine。
+
+name: alpine images
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - Dockerfile.alpine
+      - alpine.ico
+      - .github/workflows/alpine-image.yml
+  workflow_dispatch:
+    inputs:
+      alpine_version:
+        description: 'alpine-minirootfs 版本（X.Y.Z；留空=官方最新稳定版）'
+        type: string
+        default: ''
+      alpine_arches:
+        description: '基础镜像架构（空格分隔；留空=官方该版本全部架构）'
+        type: string
+        default: ''
+      build_base:
+        description: '重建 alpine 基础镜像'
+        type: boolean
+        default: true
+      update_latest:
+        description: '官方最新稳定版时更新 alpine:latest'
+        type: boolean
+        default: true
+      platforms:
+        description: 'wsl:alpine 的目标平台'
+        type: string
+        default: 'linux/amd64'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: alpine-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  alpine-base:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_base }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish alpine base image
+        env:
+          IMAGE_OWNER: yingquelou
+          ALPINE_VERSION: ${{ inputs.alpine_version }}
+          ALPINE_ARCHES: ${{ inputs.alpine_arches }}
+          ALPINE_LATEST: ${{ inputs.update_latest && '1' || '0' }}
+          ALPINE_CACHE_DIR: ${{ runner.temp }}/alpine-rootfs
+        run: |
+          export REGISTRY_AUTH_FILE="$HOME/.docker/config.json"
+          scripts/publish-alpine-image.sh
+
+  wsl-alpine:
+    needs: alpine-base
+    if: ${{ always() && (needs.alpine-base.result == 'success' || needs.alpine-base.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push wsl:alpine
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.alpine
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
+          push: true
+          # 不保留 attestation，避免多出 unknown/unknown 平台条目
+          provenance: false
+          tags: ghcr.io/yingquelou/wsl:alpine
+          labels: |
+            org.opencontainers.image.source=https://github.com/yingquelou/docker-images
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

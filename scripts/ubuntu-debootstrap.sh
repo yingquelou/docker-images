@@ -54,6 +54,28 @@ fi
 
 prev_dir=$(pwd)
 
+# ---------- 套件清单 ----------
+# 主线镜像仍在提供的版本（trusty/xenial 也还在主线；plucky/questing 虽已 EOL，但尚未归档）
+release="trusty xenial bionic focal jammy noble plucky questing resolute"
+
+# 只存在于 oldubuntu-releases 的版本。
+old_release="warty hoary breezy dapper edgy feisty gutsy hardy intrepid jaunty karmic lucid maverick natty \
+oneiric precise quantal raring saucy utopic vivid wily yakkety zesty artful cosmic disco eoan groovy hirsute \
+impish kinetic lunar mantic oracular"
+
+# 供 GitHub Actions 读取套件清单（不执行任何构建、不碰任何目录）：
+#   LIST_SUITES=1 bash ubuntu-debootstrap.sh
+if [ "${LIST_SUITES:-0}" = "1" ]; then
+    printf '%s\n' ${release} ${old_release}
+    exit 0
+fi
+
+# 只输出仍在官方发布线上的套件：这些套件在 Actions 里要覆盖官方全部架构。
+if [ "${LIST_MODERN:-0}" = "1" ]; then
+    printf '%s\n' ${release}
+    exit 0
+fi
+
 # ---------- 依赖与路径（用绝对路径，避免调用者 PATH 里没有 /usr/sbin 时 command not found）----------
 command -v sudo >/dev/null 2>&1 || { printf '缺少 sudo\n' >&2; exit 1; }
 DEBOOTSTRAP_BIN=$(command -v debootstrap 2>/dev/null || true)
@@ -82,6 +104,8 @@ sudo chmod +x "${HOME}/debootstrap-cleanup.sh"
 # ---------- 镜像与密钥环 ----------
 MIRROR="https://mirrors.aliyun.com/ubuntu"
 OLD_MIRROR="https://mirrors.aliyun.com/oldubuntu-releases/ubuntu"
+# arm64/armhf/ppc64el/riscv64/s390x/powerpc 等非 amd64/i386 架构只在 ubuntu-ports 镜像
+PORTS_MIRROR="${UBUNTU_PORTS_MIRROR:-https://ports.ubuntu.com/ubuntu-ports}"
 KEYRING="/usr/share/keyrings/ubuntu-archive-keyring.gpg"
 # EOL 版本的 Release 由已移出 ubuntu-archive-keyring 的密钥签名，
 # 继续用 ubuntu-archive-keyring.gpg 会报 “Release signed by unknown key”
@@ -89,14 +113,6 @@ KEYRING="/usr/share/keyrings/ubuntu-archive-keyring.gpg"
 #   >= 2016.10.27 起被移入 removed-keys，必须显式 --keyring 指定）。
 REMOVED_KEYRING="/usr/share/keyrings/ubuntu-archive-removed-keys.gpg"
 CACHE_DIR="${HOME}/debootstrap-cache"
-
-# 主线镜像仍在提供的版本（trusty/xenial 也还在主线；plucky/questing 虽已 EOL，但尚未归档）
-release="trusty xenial bionic focal jammy noble plucky questing resolute"
-
-# 只存在于 oldubuntu-releases 的版本。
-old_release="warty hoary breezy dapper edgy feisty gutsy hardy intrepid jaunty karmic lucid maverick natty \
-oneiric precise quantal raring saucy utopic vivid wily yakkety zesty artful cosmic disco eoan groovy hirsute \
-impish kinetic lunar mantic oracular"
 
 # ---------- 可选：只构建部分版本/架构（便于分步验证） ----------
 # 用法示例：ONLY="noble trusty precise" ARCHES="amd64" bash ubuntu-debootstrap.sh
@@ -108,6 +124,16 @@ want_suite() {
     case " $only " in
         *" $1 "*) return 0 ;;
         *)        return 1 ;;
+    esac
+}
+
+# amd64/i386 走原来的主线/归档镜像；其余架构（ports）走 ubuntu-ports。
+# 跨架构构建依赖 qemu binfmt，由 Actions 里的 setup-qemu 注册。
+mirror_for_arch() {
+    local arch=$1 base=$2
+    case "$arch" in
+        amd64|i386) printf '%s\n' "$base" ;;
+        *)          printf '%s\n' "$PORTS_MIRROR" ;;
     esac
 }
 
@@ -441,14 +467,14 @@ EOF
 for suite in ${release}; do
     want_suite "$suite" || continue
     for arch in ${arches}; do
-        build_suite "$suite" "$arch" "$MIRROR" 0
+        build_suite "$suite" "$arch" "$(mirror_for_arch "$arch" "$MIRROR")" 0
     done
 done
 
 for suite in ${old_release}; do
     want_suite "$suite" || continue
     for arch in ${arches}; do
-        build_suite "$suite" "$arch" "$OLD_MIRROR" 1
+        build_suite "$suite" "$arch" "$(mirror_for_arch "$arch" "$OLD_MIRROR")" 1
     done
 done
 

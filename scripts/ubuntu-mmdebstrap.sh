@@ -39,6 +39,28 @@ fi
 
 prev_dir=$(pwd)
 
+# ---------- 套件清单 ----------
+# 主线镜像仍在提供的版本（trusty/xenial 也还在主线；plucky/questing 虽已 EOL，但尚未归档）
+release="trusty xenial bionic focal jammy noble plucky questing resolute"
+
+# 只存在于 oldubuntu-releases 的版本。
+# 仓库目录名区分大小写，必须全小写：原来写的 Warty/Hoary/... 会去取
+# dists/Warty/Release，在镜像上必然 404，全部旧版本因此一个都构建不出来。
+old_release="warty hoary breezy dapper edgy feisty gutsy hardy intrepid jaunty karmic lucid maverick natty oneiric precise quantal raring saucy utopic vivid wily yakkety zesty artful cosmic disco eoan groovy hirsute impish kinetic lunar mantic oracular"
+
+# 供 GitHub Actions 读取套件清单（不执行任何构建、不碰任何目录）：
+#   LIST_SUITES=1 bash ubuntu-mmdebstrap.sh
+if [ "${LIST_SUITES:-0}" = "1" ]; then
+    printf '%s\n' ${release} ${old_release}
+    exit 0
+fi
+
+# 只输出仍在官方发布线上的套件：这些套件在 Actions 里要覆盖官方全部架构。
+if [ "${LIST_MODERN:-0}" = "1" ]; then
+    printf '%s\n' ${release}
+    exit 0
+fi
+
 # ---------- 依赖与路径（用绝对路径，避免调用者 PATH 里没有 /usr/sbin 时 command not found）----------
 command -v sudo >/dev/null 2>&1 || { printf '缺少 sudo\n' >&2; exit 1; }
 MMDEBSTRAP_BIN=$(command -v mmdebstrap 2>/dev/null || true)
@@ -61,6 +83,8 @@ mkdir -p ./ubuntu/logs ~/ubuntu
 # ---------- 镜像 ----------
 MIRROR="https://mirrors.aliyun.com/ubuntu"
 OLD_MIRROR="https://mirrors.aliyun.com/oldubuntu-releases/ubuntu"
+# 非 amd64/i386 架构只在 ubuntu-ports；跨架构构建依赖 qemu binfmt
+PORTS_MIRROR="${UBUNTU_PORTS_MIRROR:-https://ports.ubuntu.com/ubuntu-ports}"
 
 # ---------- 归档（EOL）版本相关 ----------
 # 归档源的 Release 由已移出 ubuntu-archive-keyring 的密钥签名（Ubuntu bug #1851459：
@@ -84,14 +108,6 @@ OLD_DPKG_SUITES=" warty hoary breezy dapper edgy feisty gutsy hardy intrepid jau
 OLD_DPKG_SETUP_NAME="old-dpkg-setup.sh"
 OLD_DPKG_SETUP_FILE="${HOME}/ubuntu/${OLD_DPKG_SETUP_NAME}"
 
-# 主线镜像仍在提供的版本（trusty/xenial 也还在主线；plucky/questing 虽已 EOL，但尚未归档）
-release="trusty xenial bionic focal jammy noble plucky questing resolute"
-
-# 只存在于 oldubuntu-releases 的版本。
-# 仓库目录名区分大小写，必须全小写：原来写的 Warty/Hoary/... 会去取
-# dists/Warty/Release，在镜像上必然 404，全部旧版本因此一个都构建不出来。
-old_release="warty hoary breezy dapper edgy feisty gutsy hardy intrepid jaunty karmic lucid maverick natty oneiric precise quantal raring saucy utopic vivid wily yakkety zesty artful cosmic disco eoan groovy hirsute impish kinetic lunar mantic oracular"
-
 # ---------- 可选：只构建部分版本/架构（便于分步验证） ----------
 # 用法示例：ONLY="noble trusty precise" ARCHES="amd64" bash ubuntu-mmdebstrap.sh
 only="${ONLY:-}"
@@ -102,6 +118,15 @@ want_suite() {
     case " $only " in
         *" $1 "*) return 0 ;;
         *)        return 1 ;;
+    esac
+}
+
+# amd64/i386 走原来的主线/归档镜像；其余架构（ports）走 ubuntu-ports
+mirror_for_arch() {
+    local arch=$1 base=$2
+    case "$arch" in
+        amd64|i386) printf '%s\n' "$base" ;;
+        *)          printf '%s\n' "$PORTS_MIRROR" ;;
     esac
 }
 
@@ -275,14 +300,14 @@ write_old_dpkg_setup
 for suite in ${release}; do
     want_suite "$suite" || continue
     for arch in ${arches}; do
-        build_suite "$suite" "$arch" "$MIRROR" 0
+        build_suite "$suite" "$arch" "$(mirror_for_arch "$arch" "$MIRROR")" 0
     done
 done
 
 for suite in ${old_release}; do
     want_suite "$suite" || continue
     for arch in ${arches}; do
-        build_suite "$suite" "$arch" "$OLD_MIRROR" 1
+        build_suite "$suite" "$arch" "$(mirror_for_arch "$arch" "$OLD_MIRROR")" 1
     done
 done
 

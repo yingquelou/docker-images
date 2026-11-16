@@ -52,6 +52,29 @@ fi
 
 prev_dir=$(pwd)
 
+# ---------- 套件清单 ----------
+# 主线镜像仍在提供的版本
+release="trixie bookworm bullseye"
+
+# 只有归档镜像才有的版本
+old_release="buster stretch jessie wheezy squeeze lenny etch sarge woody potato"
+
+# 注：buzz/rex/bo/hamm/slink（无 Release 的远古版本）不在本脚本构建，见文件头说明与
+# debian-ancient.py。
+
+# 供 GitHub Actions 读取套件清单（不执行任何构建、不碰任何目录）：
+#   LIST_SUITES=1 bash debian-debootstrap.sh
+if [ "${LIST_SUITES:-0}" = "1" ]; then
+    printf '%s\n' ${release} ${old_release}
+    exit 0
+fi
+
+# 只输出仍在官方发布线上的套件：这些套件在 Actions 里要覆盖官方全部架构。
+if [ "${LIST_MODERN:-0}" = "1" ]; then
+    printf '%s\n' ${release}
+    exit 0
+fi
+
 # ---------- 依赖与路径（用绝对路径，避免 PATH 里没有 /usr/sbin 时“command not found”）----------
 command -v sudo >/dev/null 2>&1 || { printf '缺少 sudo\n' >&2; exit 1; }
 DEBOOTSTRAP_BIN=$(command -v debootstrap 2>/dev/null || true)
@@ -86,15 +109,6 @@ sudo chmod +x "${HOME}/debootstrap-cleanup.sh" 2>/dev/null || true
 # ---------- 镜像与版本 ----------
 MAIN_MIRROR="https://deb.debian.org/debian"
 ARCHIVE_MIRROR="https://archive.debian.org/debian"
-
-# 主线镜像仍在提供的版本
-release="trixie bookworm bullseye"
-
-# 只有归档镜像才有的版本
-old_release="buster stretch jessie wheezy squeeze lenny etch sarge woody potato"
-
-# 注：buzz/rex/bo/hamm/slink（无 Release 的远古版本）不在本脚本构建，见文件头说明与
-# debian-ancient.py。
 
 # ---------- 可选：只构建部分版本/架构 ----------
 # 用法示例：ONLY="trixie buster" ARCHES="amd64" bash debian-debootstrap.sh

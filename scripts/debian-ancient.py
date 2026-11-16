@@ -709,6 +709,10 @@ def build_suite(suite, arch, lg):
 
 
 def main():
+    # 供 GitHub Actions 读取套件清单（不执行构建，也不需要 root）
+    if "--list-suites" in sys.argv[1:]:
+        print("\n".join(SUITES))
+        return 0
     if os.geteuid() != 0:
         print("需要 root 权限（chroot/mknod），请用 sudo 运行", file=sys.stderr)
         return 2
