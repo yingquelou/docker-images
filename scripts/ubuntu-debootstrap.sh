@@ -302,7 +302,7 @@ build_suite() {
     local out="ubuntu-${suite}-${arch}-rootfs.tar.gz"
     local dest="${prev_dir}/ubuntu/${out}"
     local logfile="${prev_dir}/ubuntu/logs/${suite}-${arch}.log"
-    local sig_opts="" extra="" candidates="" variant_opts="" last_try="" rc=1 stop_retry=0
+    local sig_opts="" extra="" candidates="" variant_opts="" last_try="" rc=1 stop_retry=0 dl_retry=0
     local includes="ca-certificates,curl$(extra_includes_for "$suite")"
     local dbbin=""
     local qemu_tried=0
@@ -385,6 +385,14 @@ build_suite() {
                 fi
                 log "  $suite/$arch：老 i386 glibc 的 ld.so 断言（当前内核不兼容）"
                 log "  → 先安装 qemu 再重试：apt-get install qemu-user-binfmt"
+            fi
+            if [ "$dl_retry" -lt 2 ] \
+                    && grep -qE 'ERROR 5[0-9][0-9]|Temporary failure|Connection (reset|timed out)|Read error|Giving up' "$last_try" 2>/dev/null; then
+                dl_retry=$((dl_retry + 1))
+                log "  $suite/$arch：镜像返回瞬时错误，${dl_retry}/2 次重试"
+                sleep 10
+                clean_target "$dir"
+                continue
             fi
             log "  $suite/$arch 失败：$(explain_failure "$dir" "$arch")"
             stop_retry=1
