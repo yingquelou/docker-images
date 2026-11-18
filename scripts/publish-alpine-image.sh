@@ -175,6 +175,7 @@ workdir=$(mktemp -d)
 trap "rm -rf '$workdir'" EXIT
 
 arch_args=()
+arch_count=0
 for arch in $ARCHES; do
     url="$CDN/v${series}/releases/${arch}/alpine-minirootfs-${VERSION}-${arch}.tar.gz"
     tarball="$CACHE_DIR/alpine-minirootfs-${VERSION}-${arch}.tar.gz"
@@ -188,11 +189,12 @@ for arch in $ARCHES; do
             mv -f "$tarball.part" "$tarball"
         fi
     fi
-    arch_args+=("${arch}=${tarball}")
+    arch_args+=(--arch "${arch}=${tarball}")
+    arch_count=$((arch_count + 1))
 done
 
 layout="$workdir/alpine-$VERSION"
-log "合成 alpine:$VERSION ← ${#arch_args[@]} 个架构（单条多架构清单）"
+log "合成 alpine:$VERSION ← ${arch_count} 个架构（单条多架构清单）"
 if [ "$DRY_RUN" = "1" ]; then
     printf '+ python3 %s --out %s --ref %s --distro alpine --source %s %s\n' \
         "$OCI_HELPER" "$layout" "$VERSION" "$SOURCE_URL" "${arch_args[*]}"
