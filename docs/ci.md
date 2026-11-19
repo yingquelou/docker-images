@@ -10,7 +10,7 @@
 - 输入：`distributions`（both/debian/ubuntu）、`suites`（空格/逗号分隔，留空=全集）、
   `arches`（留空=官方该套件的全部架构）、`builder`（debootstrap/mmdebstrap）、`publish`。
 - 矩阵：每个套件一个 job（`max-parallel: 20`，超时 360 分钟），套件内的架构串行构建；62 个
-  套件约 177 个套件×架构组合。全量实测墙钟约 33 分钟。
+  套件约 177 个套件×架构组合。全量实测墙钟 38 分 53 秒。
 - 架构解析：`prepare` 用 `LIST_SUITES=1` / `--list-suites` 读套件清单，用 `suite-arches.py` 读
   `dists/<suite>/Release` 的 `Architectures:`；过滤掉 `kfreebsd-*`、`hurd-*`、`ia64`、`s390`
   以及 `amd64v3`（会把 amd64 变成两个平台条目）。
@@ -37,6 +37,9 @@
 - 基础镜像：`publish-alpine-image.sh` 从 `dl-cdn.alpinelinux.org` 下载各架构 minirootfs，
   合成一个 `<version>` 索引；`<major.minor>` 与 `latest` 仅在该版本是系列/官方最新时前进。
 - `wsl:alpine`：`docker/build-push-action` 构建，`provenance: false`，单架构清单，无 attestation。
+- 缓存：基础镜像没有编译环节，耗时主要是 9 个 minirootfs 的下载（约 20 MB）与推送；
+  buildx cache 不适用，按版本缓存 tarball 只能省十几秒，且会占用 Actions 缓存配额，
+  收益低于维护成本，因此不加缓存。
 
 ## 发布机制
 
@@ -50,6 +53,7 @@
 
 ## 实测记录
 
-- 全量 `rootfs-images`：62 个 build job，60 成功、2 失败（warty/hoary 的 i386），修复后重跑成功；
-  墙钟 32 分 59 秒。
+- 全量 `rootfs-images`（2026-11-18）：prepare + 62 个 build job + merge，**单次运行 64/64 全部成功**，
+  墙钟 38 分 53 秒。
 - 单套件 bookworm：9 架构索引，压缩层 31.63 MB，解包 94.5 MB，`apt update` / `apt install` 正常。
+- 全量运行中镜像偶发 502（aliyun 的单个 deb）；脚本会清理并重试该架构，最多 2 次。
